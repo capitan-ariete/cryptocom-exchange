@@ -154,7 +154,8 @@ class Account:
 
     async def create_order(
             self, pair: Pair, side: OrderSide, type_: OrderType,
-            quantity: float, price: float = 0,
+            quantity: float, price: Optional[float] = None,
+            trigger_price: Optional[float] = None,
             force_type: OrderForceType = OrderForceType.GOOD_TILL_CANCEL,
             exec_type: OrderExecType = OrderExecType.MARKET,
             client_id: int = None) -> int:
@@ -181,6 +182,12 @@ class Account:
                     "Error, MARKET execution do not support price value")
             data['price'] = "{:.{}f}".format(price, pair.price_precision)
 
+            if trigger_price:
+                if type_ == OrderType.LIMIT:
+                    raise ValueError(
+                        "Error, LIMIT execution do not support trigger price value")
+                data['trigger_price'] = trigger_price
+
         resp = await self.api.post('private/create-order', {'params': data})
         return int(resp['order_id'])
 
@@ -188,23 +195,85 @@ class Account:
             self, pair: Pair, quantity: float, price: float,
             force_type: OrderForceType = OrderForceType.GOOD_TILL_CANCEL,
             exec_type: OrderExecType = OrderExecType.MARKET,
-            client_id: int = None) -> int:
+            ) -> int:
         """Buy limit order."""
         return await self.create_order(
             pair, OrderSide.BUY, OrderType.LIMIT, quantity, price,
             force_type, exec_type
         )
 
+    async def buy_market(
+            self, pair: Pair, spend: float, wait_for_fill=False) -> int:
+        """Buy market order."""
+        order_id = await self.create_order(
+            pair, OrderSide.BUY, OrderType.MARKET, spend
+        )
+        if wait_for_fill:
+            await self.wait_for_status(order_id, (
+                OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED,
+                OrderStatus.REJECTED
+            ))
+
+        return order_id
+
     async def sell_limit(
             self, pair: Pair, quantity: float, price: float,
             force_type: OrderForceType = OrderForceType.GOOD_TILL_CANCEL,
             exec_type: OrderExecType = OrderExecType.MARKET,
-            client_id: int = None) -> int:
+            ) -> int:
         """Sell limit order."""
         return await self.create_order(
             pair, OrderSide.SELL, OrderType.LIMIT, quantity, price,
             force_type, exec_type
         )
+
+    async def sell_market(
+            self, pair: Pair, quantity: float, wait_for_fill=False) -> int:
+        """Sell market order."""
+        order_id = await self.create_order(
+            pair, OrderSide.SELL, OrderType.MARKET, quantity
+        )
+
+        if wait_for_fill:
+            await self.wait_for_status(order_id, (
+                OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED,
+                OrderStatus.REJECTED
+            ))
+
+        return order_id
+
+    async def sell_stop_loss(
+        self, pair: Pair, quantity: float, wait_for_fill=False
+    ) -> int:
+        """Sell market order."""
+        order_id = await self.create_order(
+            pair, OrderSide.SELL, OrderType.MARKET, quantity
+        )
+
+        if wait_for_fill:
+            await self.wait_for_status(order_id, (
+                OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED,
+                OrderStatus.REJECTED
+            ))
+
+        return order_id
+
+    async def sell_stop_limit(
+            self, pair: Pair, price: float, trigger_price: float, quantity: float,
+            force_type: OrderForceType = OrderForceType.GOOD_TILL_CANCEL,
+            exec_type: OrderExecType = OrderExecType.MARKET,
+    ) -> int:
+        """Sell market order."""
+        order_id = await self.create_order(
+            pair=pair,
+            side=OrderSide.SELL, type_=OrderType.STOP_LIMIT,
+            quantity=quantity, price=price,
+            trigger_price=trigger_price,
+            force_type=force_type,
+            exec_type=exec_type
+        )
+
+        return order_id
 
     async def wait_for_status(
             self, order_id: int, statuses, delay: int = 0.1) -> None:
@@ -221,35 +290,6 @@ class Account:
         if order.status not in statuses:
             raise ApiError(
                 f"Status not changed for: {order}, must be in: {statuses}")
-
-    async def buy_market(
-            self, pair: Pair, spend: float, wait_for_fill=False) -> int:
-        """Buy market order."""
-        order_id = await self.create_order(
-            pair, OrderSide.BUY, OrderType.MARKET, spend
-        )
-        if wait_for_fill:
-            await self.wait_for_status(order_id, (
-                OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED,
-                OrderStatus.REJECTED
-            ))
-
-        return order_id
-
-    async def sell_market(
-            self, pair: Pair, quantity: float, wait_for_fill=False) -> int:
-        """Sell market order."""
-        order_id = await self.create_order(
-            pair, OrderSide.SELL, OrderType.MARKET, quantity
-        )
-
-        if wait_for_fill:
-            await self.wait_for_status(order_id, (
-                OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED,
-                OrderStatus.REJECTED
-            ))
-
-        return order_id
 
     async def get_order(self, order_id: int) -> Order:
         """Get order info."""
@@ -314,3 +354,4 @@ class Account:
                 yield Order.create_from_api(
                     self.pairs[data['instrument_name']], order
                 )
+
